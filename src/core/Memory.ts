@@ -1,4 +1,4 @@
-import { Bus } from "./Bus"
+import { Bus } from './Bus'
 
 export class Memory {
   private ram: Uint8Array
@@ -28,11 +28,9 @@ export class Memory {
 
   public read(addr: number) {
     if (typeof this.ram[addr] != 'undefined') {
-        return this.ram[addr]
+      return this.ram[addr]
+    } else {
+      return 0x0
     }
-    else {
-        return 0x0
-    }
-}
-
+  }
 }

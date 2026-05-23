@@ -1,0 +1,83 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const strict_1 = __importDefault(require("node:assert/strict"));
+const node_test_1 = __importDefault(require("node:test"));
+const Bus_1 = require("../src/core/Bus");
+const Intel8080_1 = require("../src/core/Intel8080");
+const runInstruction = (cpu, bus, bytes, startAddress = 0x2000) => {
+    for (const [index, byte] of bytes.entries()) {
+        bus.writeRam(byte, startAddress + index);
+    }
+    cpu.registers.programCounter = startAddress;
+    cpu.executeNextInstruction();
+};
+(0, node_test_1.default)('INX/DCX/DAD work for register pairs and carry', () => {
+    const cpu = new Intel8080_1.Intel8080();
+    const bus = new Bus_1.Bus();
+    cpu.connectBus(bus);
+    bus.connectCPU(cpu);
+    cpu.registers.B = 0x12;
+    cpu.registers.C = 0xff;
+    runInstruction(cpu, bus, [0x03]);
+    strict_1.default.equal(cpu.registers.B, 0x13);
+    strict_1.default.equal(cpu.registers.C, 0x00);
+    runInstruction(cpu, bus, [0x0b]);
+    strict_1.default.equal(cpu.registers.B, 0x12);
+    strict_1.default.equal(cpu.registers.C, 0xff);
+    cpu.registers.H = 0xff;
+    cpu.registers.L = 0xff;
+    runInstruction(cpu, bus, [0x09]);
+    strict_1.default.equal(cpu.registers.H, 0x12);
+    strict_1.default.equal(cpu.registers.L, 0xfe);
+    strict_1.default.equal((cpu.flags & (1 << Intel8080_1.Flag.C)) !== 0, true);
+});
+(0, node_test_1.default)('LDA/STA and LHLD/SHLD transfer memory correctly', () => {
+    const cpu = new Intel8080_1.Intel8080();
+    const bus = new Bus_1.Bus();
+    cpu.connectBus(bus);
+    bus.connectCPU(cpu);
+    cpu.registers.A = 0x77;
+    runInstruction(cpu, bus, [0x32, 0x00, 0x40]);
+    strict_1.default.equal(bus.readRam(0x4000), 0x77);
+    cpu.registers.A = 0x00;
+    runInstruction(cpu, bus, [0x3a, 0x00, 0x40]);
+    strict_1.default.equal(cpu.registers.A, 0x77);
+    cpu.registers.H = 0x12;
+    cpu.registers.L = 0x34;
+    runInstruction(cpu, bus, [0x22, 0x10, 0x40]);
+    strict_1.default.equal(bus.readRam(0x4010), 0x34);
+    strict_1.default.equal(bus.readRam(0x4011), 0x12);
+    cpu.registers.H = 0x00;
+    cpu.registers.L = 0x00;
+    runInstruction(cpu, bus, [0x2a, 0x10, 0x40]);
+    strict_1.default.equal(cpu.registers.H, 0x12);
+    strict_1.default.equal(cpu.registers.L, 0x34);
+});
+(0, node_test_1.default)('LDAX/STAX, XCHG and SPHL work as expected', () => {
+    const cpu = new Intel8080_1.Intel8080();
+    const bus = new Bus_1.Bus();
+    cpu.connectBus(bus);
+    bus.connectCPU(cpu);
+    cpu.registers.B = 0x40;
+    cpu.registers.C = 0x20;
+    cpu.registers.A = 0x9a;
+    runInstruction(cpu, bus, [0x02]);
+    strict_1.default.equal(bus.readRam(0x4020), 0x9a);
+    bus.writeRam(0x5b, 0x4020);
+    runInstruction(cpu, bus, [0x0a]);
+    strict_1.default.equal(cpu.registers.A, 0x5b);
+    cpu.registers.D = 0x12;
+    cpu.registers.E = 0x34;
+    cpu.registers.H = 0xab;
+    cpu.registers.L = 0xcd;
+    runInstruction(cpu, bus, [0xeb]);
+    strict_1.default.equal(cpu.registers.D, 0xab);
+    strict_1.default.equal(cpu.registers.E, 0xcd);
+    strict_1.default.equal(cpu.registers.H, 0x12);
+    strict_1.default.equal(cpu.registers.L, 0x34);
+    runInstruction(cpu, bus, [0xf9]);
+    strict_1.default.equal(cpu.registers.stackPointer, 0x1234);
+});

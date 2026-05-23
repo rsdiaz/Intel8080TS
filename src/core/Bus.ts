@@ -1,6 +1,6 @@
-import { Device } from "./Device"
-import { Intel8080 } from "./Intel8080"
-import { Memory } from "./Memory"
+import { Device } from './Device'
+import { Intel8080 } from './Intel8080'
+import { Memory } from './Memory'
 
 export class Bus {
   private memory: Memory
@@ -27,6 +27,10 @@ export class Bus {
     this.writeDevices[port] = device
   }
 
+  public connectDeviceToReadPort(port: number, device: Device) {
+    this.readDevices[port] = device
+  }
+
   public writeRam(value: number, address: number) {
     this.memory.write(value, address)
   }
@@ -36,11 +40,18 @@ export class Bus {
   }
 
   public writeDevice(port: number, value: number) {
-    this.writeDevices[port].write(port, value)
+    const device = this.writeDevices[port]
+    if (!device) {
+      throw new Error(`No write device connected on port ${port}`)
+    }
+    device.write(port, value)
   }
 
   public readDevice(port: number) {
-    return this.readDevices[port].read(port)
+    const device = this.readDevices[port]
+    if (!device) {
+      throw new Error(`No read device connected on port ${port}`)
+    }
+    return device.read(port)
   }
-
 }

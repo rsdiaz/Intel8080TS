@@ -1,4 +1,4 @@
 export interface Device {
-  read(port: number): void
+  read(port: number): number
   write(port: number, value: number): void
 }
