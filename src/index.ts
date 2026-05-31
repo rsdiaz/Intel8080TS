@@ -1,20 +1,16 @@
-import { ExampleComputer } from './ExampleComputer'
+import process from 'node:process'
 
-const computer = new ExampleComputer(true)
+process.stdout.write(`
+Intel8080TS — emulador didáctico del Intel 8080
 
-// Programa de prueba en código de máquina
-const program = [
-  0x3e,
-  0x41, // MVI A, 'A' ; Cargar 'A' en A
-  0xd3,
-  0x01, // OUT 1      ; Imprimir A
-  0x3e,
-  0x42, // MVI A, 'B' ; Cargar 'B' en A
-  0xd3,
-  0x01, // OUT 1      ; Imprimir B
-  0x76 // HLT        ; Detener ejecución
-]
+Scripts disponibles:
+  pnpm run example             Lista los ejemplos disponibles
+  pnpm run example <nombre>    Ejecuta un ejemplo concreto (hello, factorial, ...)
+  pnpm run cpudiag [rom.COM]   Ejecuta un ROM de diagnóstico (CPUDIAG, TST8080, ...)
+  pnpm run repl [rom.COM]      Abre el debugger interactivo
 
-computer.loadProgram(program)
+Añade --trace a cualquiera de los anteriores para ver el trace de
+instrucciones por stderr.
 
-computer.executeProgram()
+Documentación completa: README.md
+`)

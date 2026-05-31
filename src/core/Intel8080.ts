@@ -1,4 +1,32 @@
+import process from 'node:process'
+
 import { Bus } from './Bus'
+
+/**
+ * Emulador del procesador Intel 8080 (1974).
+ *
+ * Arquitectura modelada:
+ *  - 7 registros de 8 bits de propósito general: A (acumulador), B, C, D, E,
+ *    H, L. Los pares BC, DE y HL pueden usarse como registros de 16 bits.
+ *  - Registro M (pseudo-registro): referencia indirecta a memoria a través
+ *    de HL. La CPU lo trata como un "registro" más en muchas instrucciones.
+ *  - Registro PSW (Program Status Word): combina el acumulador con el byte
+ *    de flags. Los flags son S, Z, A (auxiliary carry), P, C.
+ *  - Stack Pointer (SP, 16 bits) y Program Counter (PC, 16 bits).
+ *  - Bus de 16 bits de direcciones (64 KB) y 8 bits de datos.
+ *  - Bus de I/O separado con 256 puertos (instrucciones IN/OUT).
+ *
+ * Modelo de ejecución:
+ *  1. FETCH:   lee el byte apuntado por PC, incrementa PC.
+ *  2. DECODE:  identifica la familia mediante máscaras de bits sobre el
+ *              opcode (ver métodos `execute*Instruction`).
+ *  3. EXECUTE: ejecuta la operación, actualiza registros y flags, y, si
+ *              corresponde, lee operandos adicionales (1 ó 2 bytes).
+ *
+ * No se modelan ciclos máquina ni timing real: cada instrucción devuelve
+ * la cantidad de "Ticks" que tomaría en hardware real, pero el bucle de
+ * ejecución no la respeta.
+ */
 
 export enum Flag {
   /** Sign flag. */
@@ -122,6 +150,18 @@ export class Intel8080 {
     this.setFlag(Flag.P, this.hasEvenParity(value8Bit))
   }
 
+  /**
+   * Construye el byte de flags (Program Status, parte baja del PSW)
+   * con el layout oficial del 8080:
+   *
+   *   bit  7  6  5  4  3  2  1  0
+   *        S  Z  0  A  0  P  1  C
+   *
+   * Los bits 5 y 3 están **siempre a 0**, y el bit 1 está **siempre a 1**.
+   * Esto es importante porque cualquier programa que haga PUSH PSW + POP
+   * PSW espera recuperar exactamente el mismo byte, incluidos esos bits
+   * "ficticios". Si no respetamos esa convención, CPUDIAG falla.
+   */
   private getFlagsByte() {
     let flagsByte = 0x02
     if (this.isFlagSet(Flag.C)) {
@@ -153,6 +193,13 @@ export class Intel8080 {
     this.setFlag(Flag.S, (normalizedFlags & (1 << Flag.S)) !== 0)
   }
 
+  /**
+   * Calcula el resultado de una suma 8-bit y actualiza S, Z, A, P, C.
+   *
+   * El bit de auxiliary carry (A) se activa si hubo acarreo del nibble
+   * bajo al nibble alto. Es necesario para que DAA ajuste correctamente
+   * el resultado a BCD.
+   */
   private applyAddFlags(accumulatorValue: number, value: number, carryIn = 0) {
     const result = accumulatorValue + value + carryIn
     const result8Bit = result & 0xff
@@ -167,6 +214,14 @@ export class Intel8080 {
     return result8Bit
   }
 
+  /**
+   * Calcula el resultado de una resta 8-bit y actualiza S, Z, A, P, C.
+   *
+   * El flag C aquí actúa como "borrow" (préstamo): se activa cuando el
+   * minuendo es menor que el sustraendo, indicando que la operación
+   * "pidió prestado". El auxiliary carry sigue la misma lógica a nivel
+   * de nibble bajo.
+   */
   private applySubFlags(accumulatorValue: number, value: number, borrowIn = 0) {
     const result = accumulatorValue - value - borrowIn
     const result8Bit = result & 0xff
@@ -189,6 +244,21 @@ export class Intel8080 {
     return result8Bit
   }
 
+  /**
+   * Tabla de condiciones del 8080. Cada instrucción condicional
+   * (Jcc, Ccc, Rcc) codifica una de estas 8 condiciones en sus bits 5-3.
+   *
+   *   código  mnemónico  condición
+   *   ------  ---------  --------------------------
+   *     0       NZ       Not Zero  (Z = 0)
+   *     1       Z        Zero      (Z = 1)
+   *     2       NC       No Carry  (C = 0)
+   *     3       C        Carry     (C = 1)
+   *     4       PO       Parity Odd  (P = 0)
+   *     5       PE       Parity Even (P = 1)
+   *     6       P        Positive  (S = 0)
+   *     7       M        Minus     (S = 1)
+   */
   private evaluateCondition(conditionCode: number) {
     switch (conditionCode & 0x07) {
       case 0:
@@ -223,6 +293,23 @@ export class Intel8080 {
     return (highByte << 8) | lowByte
   }
 
+  /**
+   * Mapa de los códigos de 3 bits que el 8080 usa para referirse a
+   * registros en muchas instrucciones (MOV, MVI, INR, DCR, ADD, ...).
+   *
+   * El orden refleja literalmente el cableado del decoder del chip:
+   *
+   *   código  registro
+   *   ------  --------
+   *     000      B
+   *     001      C
+   *     010      D
+   *     011      E
+   *     100      H
+   *     101      L
+   *     110      M   (pseudo-registro: memoria apuntada por HL)
+   *     111      A
+   */
   private registerCodeMap: RegisterOrMemoryName[] = [
     'B',
     'C',
@@ -884,6 +971,10 @@ export class Intel8080 {
     }
 
     if (opcode === 0xeb) {
+      // XCHG: intercambia HL ↔ DE.
+      // Útil porque la mayoría de las instrucciones de acceso indirecto
+      // (LDAX, MOV M,r) usan HL; XCHG permite "rotar" DE a HL para
+      // aprovechar esas instrucciones sin perder el contenido original.
       const oldD = this.registers.D
       const oldE = this.registers.E
       this.registers.D = this.registers.H
@@ -897,6 +988,8 @@ export class Intel8080 {
     }
 
     if (opcode === 0xf9) {
+      // SPHL: SP ← HL. Permite mover el stack a una zona arbitraria de
+      // memoria sin necesidad de cargarlo con LXI SP (que ocupa 3 bytes).
       this.registers.stackPointer = this.getHLAddress()
       return {
         Disassemble: 'SPHL',
@@ -1025,6 +1118,9 @@ export class Intel8080 {
     }
 
     if (opcode === 0xe3) {
+      // XTHL: intercambia HL con la palabra en el tope de la pila.
+      // No usa los helpers de stack porque NO mueve el SP: solo permuta
+      // los dos bytes del tope con H y L.
       const spLow = this.bus.readRam(this.registers.stackPointer)
       const spHigh = this.bus.readRam(
         (this.registers.stackPointer + 1) & 0xffff
@@ -1040,7 +1136,20 @@ export class Intel8080 {
     }
 
     if (opcode === 0x27) {
-      // DAA: Decimal Adjust Accumulator (BCD).
+      // DAA: Decimal Adjust Accumulator.
+      //
+      // El 8080 no tiene aritmética BCD nativa: las instrucciones ADD,
+      // SUB, etc. trabajan en binario. DAA "corrige" el acumulador tras
+      // una operación aritmética para que el resultado sea válido en
+      // BCD (Binary-Coded Decimal, donde cada nibble representa un
+      // dígito decimal 0-9).
+      //
+      // Reglas (oficial Intel):
+      //   1. Si el nibble bajo > 9 ó AC=1, se suma 0x06 al acumulador.
+      //   2. Si tras el paso 1 el nibble alto > 9 ó C=1, se suma 0x60.
+      //   3. Los flags S, Z, P se calculan sobre el resultado final;
+      //      C se setea si hubo carry en el paso 2 (o ya estaba a 1);
+      //      AC se setea si hubo carry del nibble bajo en el paso 1.
       const value = this.registers.A
       let correction = 0
       let carry = this.isFlagSet(Flag.C)
@@ -1089,7 +1198,6 @@ export class Intel8080 {
    */
   out(port: number) {
     this.bus.writeDevice(port, this.registers.A)
-    // this._clock += 10;
     this.log(String.fromCharCode(this.registers.A) + ' sent to device #' + port)
     return {
       Disassemble: `OUT $#${port.toString(16).padStart(2, '0')}`,
@@ -1099,96 +1207,125 @@ export class Intel8080 {
 
   halt() {
     this.halted = true
-    // this.clock += 7
     return { Disassemble: 'HLT', Ticks: 7 }
+  }
+
+  /**
+   * Devuelve la longitud en bytes de una instrucción 8080 dado su opcode.
+   *
+   * Las instrucciones del 8080 ocupan 1, 2 ó 3 bytes:
+   *  - 1 byte: solo opcode (la mayoría).
+   *  - 2 bytes: opcode + dato inmediato de 8 bits (MVI, ADI, IN, OUT, ...).
+   *  - 3 bytes: opcode + dato/dirección inmediato de 16 bits (LXI, JMP,
+   *    CALL, LDA, STA, LHLD, SHLD, saltos y llamadas condicionales).
+   *
+   * Útil para el modo trace y para que un disassembler pueda avanzar el
+   * cursor sin ejecutar.
+   */
+  public static instructionLength(opcode: number): number {
+    // 3 bytes
+    if ((opcode & 0xcf) === 0x01) return 3 // LXI rp, d16
+    if (opcode === 0x22 || opcode === 0x2a) return 3 // SHLD, LHLD
+    if (opcode === 0x32 || opcode === 0x3a) return 3 // STA, LDA
+    if (opcode === 0xc3 || opcode === 0xcd) return 3 // JMP, CALL
+    if ((opcode & 0xc7) === 0xc2) return 3 // Jcc
+    if ((opcode & 0xc7) === 0xc4) return 3 // Ccc
+
+    // 2 bytes
+    if ((opcode & 0xc7) === 0x06) return 2 // MVI r, d8
+    if (opcode === 0xc6 || opcode === 0xce) return 2 // ADI, ACI
+    if (opcode === 0xd6 || opcode === 0xde) return 2 // SUI, SBI
+    if (opcode === 0xe6 || opcode === 0xee) return 2 // ANI, XRI
+    if (opcode === 0xf6 || opcode === 0xfe) return 2 // ORI, CPI
+    if (opcode === 0xd3 || opcode === 0xdb) return 2 // OUT, IN
+
+    return 1
+  }
+
+  private hex8(value: number) {
+    return (value & 0xff).toString(16).toUpperCase().padStart(2, '0')
+  }
+
+  private hex16(value: number) {
+    return (value & 0xffff).toString(16).toUpperCase().padStart(4, '0')
+  }
+
+  /**
+   * Devuelve una línea de trace estilo debugger con la forma:
+   *
+   *   0x0100  3E 41        MVI A, #0x41      A=41 BC=0000 DE=0000 HL=0000 SP=F000 [..A.C] (7t)
+   *
+   * Útil para el modo `--trace` y para el REPL.
+   */
+  public formatTraceLine(
+    opcodeAddress: number,
+    disassembly: string,
+    ticks: number
+  ): string {
+    const opcode = this.bus.readRam(opcodeAddress)
+    const length = Intel8080.instructionLength(opcode)
+
+    const bytes: string[] = []
+    for (let i = 0; i < length; i++) {
+      bytes.push(this.hex8(this.bus.readRam((opcodeAddress + i) & 0xffff)))
+    }
+
+    const addrStr = `0x${this.hex16(opcodeAddress)}`
+    const bytesStr = bytes.join(' ').padEnd(8)
+    const mnemStr = disassembly.padEnd(18)
+
+    const regs = [
+      `A=${this.hex8(this.registers.A)}`,
+      `BC=${this.hex8(this.registers.B)}${this.hex8(this.registers.C)}`,
+      `DE=${this.hex8(this.registers.D)}${this.hex8(this.registers.E)}`,
+      `HL=${this.hex8(this.registers.H)}${this.hex8(this.registers.L)}`,
+      `SP=${this.hex16(this.registers.stackPointer)}`
+    ].join(' ')
+
+    const flagBits = [
+      this.isFlagSet(Flag.S) ? 'S' : '.',
+      this.isFlagSet(Flag.Z) ? 'Z' : '.',
+      this.isFlagSet(Flag.A) ? 'A' : '.',
+      this.isFlagSet(Flag.P) ? 'P' : '.',
+      this.isFlagSet(Flag.C) ? 'C' : '.'
+    ].join('')
+
+    return `${addrStr}  ${bytesStr}  ${mnemStr}  ${regs} [${flagBits}] (${ticks}t)`
   }
 
   public executeNextInstruction() {
     const opcodeAddress = this.registers.programCounter
     const opcode = this.getNextByte()
-    const transferResult = this.executeTransferInstruction(opcode)
-    if (transferResult) {
-      return {
-        LastInstructionDisassembly: transferResult.Disassemble,
-        LastInstructionTicks: transferResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
+
+    const result =
+      this.executeTransferInstruction(opcode) ??
+      this.executeAluInstruction(opcode) ??
+      this.executeControlFlowInstruction(opcode) ??
+      this.executeStackInstruction(opcode) ??
+      this.executeSubroutineInstruction(opcode) ??
+      this.executeRotateInstruction(opcode) ??
+      this.executeMemoryAndPairInstruction(opcode) ??
+      this.executeMiscInstruction(opcode)
+
+    if (!result) {
+      const opcodeKey = this.formatOpcodeKey(opcode)
+      throw new Error(
+        `Opcode no soportado: ${opcodeKey} en 0x${this.hex16(opcodeAddress)}`
+      )
     }
 
-    const aluResult = this.executeAluInstruction(opcode)
-    if (aluResult) {
-      return {
-        LastInstructionDisassembly: aluResult.Disassemble,
-        LastInstructionTicks: aluResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
+    if (this.debug) {
+      process.stderr.write(
+        this.formatTraceLine(opcodeAddress, result.Disassemble, result.Ticks) +
+          '\n'
+      )
     }
 
-    const controlFlowResult = this.executeControlFlowInstruction(opcode)
-    if (controlFlowResult) {
-      return {
-        LastInstructionDisassembly: controlFlowResult.Disassemble,
-        LastInstructionTicks: controlFlowResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
+    return {
+      LastInstructionDisassembly: result.Disassemble,
+      LastInstructionTicks: result.Ticks,
+      LastInstructionAddress: opcodeAddress,
+      CPUState: this.getState()
     }
-
-    const stackResult = this.executeStackInstruction(opcode)
-    if (stackResult) {
-      return {
-        LastInstructionDisassembly: stackResult.Disassemble,
-        LastInstructionTicks: stackResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
-    }
-
-    const subroutineResult = this.executeSubroutineInstruction(opcode)
-    if (subroutineResult) {
-      return {
-        LastInstructionDisassembly: subroutineResult.Disassemble,
-        LastInstructionTicks: subroutineResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
-    }
-
-    const rotateResult = this.executeRotateInstruction(opcode)
-    if (rotateResult) {
-      return {
-        LastInstructionDisassembly: rotateResult.Disassemble,
-        LastInstructionTicks: rotateResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
-    }
-
-    const memoryPairResult = this.executeMemoryAndPairInstruction(opcode)
-    if (memoryPairResult) {
-      return {
-        LastInstructionDisassembly: memoryPairResult.Disassemble,
-        LastInstructionTicks: memoryPairResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
-    }
-
-    const miscResult = this.executeMiscInstruction(opcode)
-    if (miscResult) {
-      return {
-        LastInstructionDisassembly: miscResult.Disassemble,
-        LastInstructionTicks: miscResult.Ticks,
-        LastInstructionAddress: opcodeAddress,
-        CPUState: this.getState()
-      }
-    }
-
-    const opcodeKey = this.formatOpcodeKey(opcode)
-    throw new Error(
-      `Opcode no soportado: ${opcodeKey} en 0x${opcodeAddress.toString(16).toUpperCase().padStart(4, '0')}`
-    )
   }
 }
