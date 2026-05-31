@@ -54,6 +54,7 @@ export class Intel8080 {
   registers: Register
   flags: number
   halted = false
+  interruptsEnabled = false
   bus!: Bus
   private debug: boolean
 
@@ -220,14 +221,6 @@ export class Intel8080 {
     const highByte = this.getNextByte()
 
     return (highByte << 8) | lowByte
-  }
-
-  private opcodeTable = {
-    '0x00': () => ({ Disassemble: 'NOP', Ticks: 4 }),
-    '0xD3': () => this.out(this.getNextByte()),
-    '0xDB': () => this.in(this.getNextByte()),
-    '0x76': () => this.halt()
-    // Agrega más opcodes según sea necesario
   }
 
   private registerCodeMap: RegisterOrMemoryName[] = [
@@ -751,6 +744,17 @@ export class Intel8080 {
       }
     }
 
+    if ((opcode & 0xc7) === 0xc7) {
+      const restartNumber = (opcode >> 3) & 0x07
+      const targetAddress = restartNumber * 8
+      this.writeStackWord(this.registers.programCounter)
+      this.registers.programCounter = targetAddress
+      return {
+        Disassemble: `RST ${restartNumber}`,
+        Ticks: 11
+      }
+    }
+
     return null
   }
 
@@ -983,6 +987,87 @@ export class Intel8080 {
     return null
   }
 
+  private executeMiscInstruction(opcode: number) {
+    if (opcode === 0x00) {
+      return { Disassemble: 'NOP', Ticks: 4 }
+    }
+
+    if (opcode === 0x76) {
+      return this.halt()
+    }
+
+    if (opcode === 0xd3) {
+      return this.out(this.getNextByte())
+    }
+
+    if (opcode === 0xdb) {
+      return this.in(this.getNextByte())
+    }
+
+    if (opcode === 0x2f) {
+      this.registers.A = ~this.registers.A & 0xff
+      return { Disassemble: 'CMA', Ticks: 4 }
+    }
+
+    if (opcode === 0xe9) {
+      this.registers.programCounter = this.getHLAddress()
+      return { Disassemble: 'PCHL', Ticks: 5 }
+    }
+
+    if (opcode === 0xf3) {
+      this.interruptsEnabled = false
+      return { Disassemble: 'DI', Ticks: 4 }
+    }
+
+    if (opcode === 0xfb) {
+      this.interruptsEnabled = true
+      return { Disassemble: 'EI', Ticks: 4 }
+    }
+
+    if (opcode === 0xe3) {
+      const spLow = this.bus.readRam(this.registers.stackPointer)
+      const spHigh = this.bus.readRam(
+        (this.registers.stackPointer + 1) & 0xffff
+      )
+      this.bus.writeRam(this.registers.L, this.registers.stackPointer)
+      this.bus.writeRam(
+        this.registers.H,
+        (this.registers.stackPointer + 1) & 0xffff
+      )
+      this.registers.L = spLow
+      this.registers.H = spHigh
+      return { Disassemble: 'XTHL', Ticks: 18 }
+    }
+
+    if (opcode === 0x27) {
+      // DAA: Decimal Adjust Accumulator (BCD).
+      const value = this.registers.A
+      let correction = 0
+      let carry = this.isFlagSet(Flag.C)
+      const lowNibble = value & 0x0f
+
+      if (lowNibble > 9 || this.isFlagSet(Flag.A)) {
+        correction |= 0x06
+      }
+
+      if (value > 0x99 || this.isFlagSet(Flag.C)) {
+        correction |= 0x60
+        carry = true
+      }
+
+      const result = value + correction
+      const result8Bit = result & 0xff
+
+      this.setFlag(Flag.A, lowNibble + (correction & 0x0f) > 0x0f)
+      this.setFlag(Flag.C, carry)
+      this.updateZeroSignParityFlags(result8Bit)
+      this.registers.A = result8Bit
+      return { Disassemble: 'DAA', Ticks: 4 }
+    }
+
+    return null
+  }
+
   in(port: number) {
     const value = this.bus.readDevice(port)
     this.registers.A = value & 0xff
@@ -1091,25 +1176,19 @@ export class Intel8080 {
       }
     }
 
+    const miscResult = this.executeMiscInstruction(opcode)
+    if (miscResult) {
+      return {
+        LastInstructionDisassembly: miscResult.Disassemble,
+        LastInstructionTicks: miscResult.Ticks,
+        LastInstructionAddress: opcodeAddress,
+        CPUState: this.getState()
+      }
+    }
+
     const opcodeKey = this.formatOpcodeKey(opcode)
-    const executeInstruction =
-      this.opcodeTable[opcodeKey as keyof typeof this.opcodeTable]
-
-    if (!executeInstruction) {
-      throw new Error(
-        `Opcode no soportado: ${opcodeKey} en 0x${opcodeAddress.toString(16).toUpperCase().padStart(4, '0')}`
-      )
-    }
-
-    const result = executeInstruction()
-
-    // console.log(result)
-
-    return {
-      LastInstructionDisassembly: result.Disassemble,
-      LastInstructionTicks: result.Ticks,
-      LastInstructionAddress: opcodeAddress,
-      CPUState: this.getState()
-    }
+    throw new Error(
+      `Opcode no soportado: ${opcodeKey} en 0x${opcodeAddress.toString(16).toUpperCase().padStart(4, '0')}`
+    )
   }
 }

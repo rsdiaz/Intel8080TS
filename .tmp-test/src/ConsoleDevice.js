@@ -14,10 +14,10 @@ class ConsoleDevice {
         throw new Error(`Read device not implemented for port ${port}`);
     }
     write(port, value) {
-        if (!this.debug) {
-            return;
+        node_process_1.default.stdout.write(String.fromCharCode(value & 0xff));
+        if (this.debug) {
+            node_process_1.default.stderr.write(`\n[ConsoleDevice] port=${port} value=0x${value.toString(16)}\n`);
         }
-        node_process_1.default.stdout.write(`Port ${port} received value ${value}\n`);
     }
 }
 exports.ConsoleDevice = ConsoleDevice;

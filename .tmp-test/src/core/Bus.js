@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Bus = void 0;
-const Intel8080_1 = require("./Intel8080");
 const Memory_1 = require("./Memory");
 class Bus {
     memory;
@@ -9,7 +8,6 @@ class Bus {
     writeDevices;
     readDevices;
     constructor() {
-        this.cpu = new Intel8080_1.Intel8080();
         this.memory = new Memory_1.Memory();
         this.writeDevices = [];
         this.readDevices = [];

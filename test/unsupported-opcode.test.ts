@@ -10,11 +10,11 @@ test('throws unsupported opcode with opcode and address context', () => {
 
   cpu.connectBus(bus)
   bus.connectCPU(cpu)
-  bus.writeRam(0xff, 0x2000)
+  bus.writeRam(0xdd, 0x2000)
   cpu.registers.programCounter = 0x2000
 
   assert.throws(
     () => cpu.executeNextInstruction(),
-    /Opcode no soportado: 0xFF en 0x2000/
+    /Opcode no soportado: 0xDD en 0x2000/
   )
 })
