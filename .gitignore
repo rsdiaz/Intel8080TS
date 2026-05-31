@@ -1,5 +1,4 @@
 node_modules
-.tmp-dest
 dist
 coverage
 .DS_Store
