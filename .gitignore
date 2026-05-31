@@ -1,4 +1,14 @@
 node_modules
-.tmp-test
-roms/*
-!roms/README.md
+.tmp-dest
+dist
+coverage
+.DS_Store
+.idea
+.vscode
+*.log
+*.tsbuildinfo
+*.env
+*.env.local
+*.env.development
+*.env.test
+*.env.production
