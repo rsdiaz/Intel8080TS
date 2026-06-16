@@ -3,24 +3,31 @@
 ## Repo reality check
 - Single-package TypeScript project (no monorepo/workspaces).
 - Package manager is `pnpm` (`pnpm-lock.yaml` is present).
-- There is no real test setup yet: `npm/pnpm test` intentionally exits with error.
+- Tests live under `test/` and use `node:test`. Run with `pnpm test`.
 
 ## High-value commands
 - Dev run: `pnpm run dev` (runs `nodemon --exec ts-node src/index.ts`).
 - One-off run without watcher: `pnpm exec ts-node src/index.ts`.
-- Typecheck: `pnpm exec tsc --noEmit`.
-- Lint (no script defined): `pnpm exec eslint "src/**/*.{ts,js}"`.
+- Typecheck: `pnpm run typecheck` (or `pnpm exec tsc --noEmit`).
+- Lint: `pnpm run lint`.
+- Tests: `pnpm test`.
+- Run CPU diagnostic ROM: `pnpm run cpudiag [path/to/rom.COM]` (defaults to `roms/CPUDIAG.COM`).
 
 ## Architecture map
 - Main executable entrypoint is `src/index.ts`.
 - `src/ExampleComputer.ts` wires a `ConsoleDevice` onto bus write port `0x01`.
+- `src/CpuDiagComputer.ts` wires a `BdosDevice` on port `0xFF` and patches a CP/M BDOS trampoline at `0x0005` to run `.COM` diagnostic ROMs.
 - Core emulator pieces live under `src/core/`:
-  - `Intel8080.ts` CPU + opcode dispatch table.
+  - `Intel8080.ts` CPU + opcode dispatch (decodificación por patrones de bits).
   - `Bus.ts` RAM/device routing.
   - `Memory.ts` 64KB RAM model.
-  - `Computer.ts` composition root for CPU + bus + memory.
+  - `Computer.ts` composition root for CPU + bus + memory. Provides `loadProgram`, `loadProgramFromFile`, `setStackPointer`, `setProgramCounter`, `executeProgram`.
+
+## Opcode coverage
+Set oficial completo del Intel 8080 implementado (~244 opcodes), incluyendo DAA, CMA, XTHL, PCHL, DI, EI y RST 0-7. Los 12 opcodes indocumentados (`0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0xCB, 0xD9, 0xDD, 0xED, 0xFD`) lanzan `Opcode no soportado`.
 
 ## Agent gotchas
-- Opcode dispatch keys in `Intel8080.ts` are uppercase hex strings like `"0xD3"`; keep new keys in the same normalized format used by `executeNextInstruction()`.
-- `Computer.executeProgram()` currently hard-resets PC to `0x2000`; `loadProgram(..., startAddress)` sets PC too, but execute will override it.
-- `ts-node` is used by scripts but is not listed in `devDependencies`; if command execution fails in a fresh install, add it before assuming code regressions.
+- Toda la decodificación se hace en métodos `execute*Instruction` con máscaras de bits. Para añadir un opcode nuevo, encuentra el método más afín y agrega una rama; evita reintroducir tablas grandes.
+- `Bus` auto-inicializa un `Memory` en su constructor para que los tests puedan usarlo sin `connectMemory`. El `cpu` sí requiere `connectCPU` (usa `definite assignment`).
+- `Computer.executeProgram()` corre `while (!cpu.halted)`. No resetea PC.
+- `ts-node` no está listado en `devDependencies` pero los scripts lo usan; si falla un comando en una instalación nueva, añádelo antes de asumir regresiones.

@@ -14,9 +14,9 @@ export class ConsoleDevice implements Device {
   }
 
   write(port: number, value: number): void {
-    if (!this.debug) {
-      return
+    process.stdout.write(String.fromCharCode(value & 0xff))
+    if (this.debug) {
+      process.stderr.write(`\n[ConsoleDevice] port=${port} value=0x${value.toString(16)}\n`)
     }
-    process.stdout.write(`Port ${port} received value ${value}\n`)
   }
 }

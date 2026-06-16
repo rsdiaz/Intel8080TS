@@ -4,12 +4,11 @@ import { Memory } from './Memory'
 
 export class Bus {
   private memory: Memory
-  private cpu: Intel8080
+  private cpu!: Intel8080
   private writeDevices: Device[]
   private readDevices: Device[]
 
   constructor() {
-    this.cpu = new Intel8080()
     this.memory = new Memory()
     this.writeDevices = []
     this.readDevices = []
