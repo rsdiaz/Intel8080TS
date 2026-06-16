@@ -64,6 +64,9 @@ export class Intel8080 {
     this.debug = debug
   }
 
+  /**
+   * Logs a message to the console if debug mode is enabled.
+   */ 
   private log(message: string) {
     if (!this.debug) {
       return
@@ -71,6 +74,10 @@ export class Intel8080 {
     process.stdout.write(`${message}\n`)
   }
 
+  /**
+   * The 
+   * @param bus The bus to connect to the CPU, allowing it to read and write memory and I/O ports.
+   */
   public connectBus(bus: Bus) {
     this.bus = bus
   }
@@ -226,8 +233,9 @@ export class Intel8080 {
     '0x00': () => ({ Disassemble: 'NOP', Ticks: 4 }),
     '0xD3': () => this.out(this.getNextByte()),
     '0xDB': () => this.in(this.getNextByte()),
-    '0x76': () => this.halt()
-    // Agrega más opcodes según sea necesario
+    '0x76': () => this.halt(),
+    '0xF3': () => ({ Disassemble: 'DI', Ticks: 4 }),
+    '0xFB': () => ({ Disassemble: 'EI', Ticks: 4 })
   }
 
   private registerCodeMap: RegisterOrMemoryName[] = [
@@ -813,6 +821,42 @@ export class Intel8080 {
       }
     }
 
+    if (opcode === 0x2f) {
+      this.registers.A = (~this.registers.A) & 0xff
+      return {
+        Disassemble: 'CMA',
+        Ticks: 4
+      }
+    }
+
+    if (opcode === 0x27) {
+      const oldA = this.registers.A
+      const oldC = this.isFlagSet(Flag.C)
+      let newA = oldA
+      let ac = false
+
+      if ((newA & 0x0f) > 9 || this.isFlagSet(Flag.A)) {
+        newA += 6
+        ac = (newA & 0x10) !== 0
+      }
+
+      if ((newA >> 4) > 9 || oldC) {
+        newA += 0x60
+        this.setFlag(Flag.C, true)
+      } else {
+        this.setFlag(Flag.C, false)
+      }
+
+      this.setFlag(Flag.A, ac)
+      this.registers.A = newA & 0xff
+      this.updateZeroSignParityFlags(this.registers.A)
+
+      return {
+        Disassemble: 'DAA',
+        Ticks: 4
+      }
+    }
+
     return null
   }
 
@@ -889,6 +933,14 @@ export class Intel8080 {
       return {
         Disassemble: 'XCHG',
         Ticks: 4
+      }
+    }
+
+    if (opcode === 0xe9) {
+      this.registers.programCounter = this.getHLAddress()
+      return {
+        Disassemble: 'PCHL',
+        Ticks: 5
       }
     }
 
