@@ -9,11 +9,13 @@
     "cpudiag": "ts-node src/cpudiag.ts",
     "example": "ts-node src/examples/run.ts",
     "repl": "ts-node src/repl.ts",
+    "web": "ts-node src/server.ts",
     "typecheck": "pnpm exec tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "compile-examples": "ts-node scripts/compile-examples.ts"
   },
   "keywords": [],
   "author": "",

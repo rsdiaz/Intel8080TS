@@ -10,7 +10,14 @@ import { Device } from './core/Device'
  *   - Function 9 (C=9): imprimir cadena terminada en '$' apuntada por DE.
  */
 export class BdosDevice implements Device {
-  constructor(private computer: Computer) {}
+  private output: (char: string) => void
+
+  constructor(
+    private computer: Computer,
+    output?: (char: string) => void
+  ) {
+    this.output = output ?? ((char: string) => process.stdout.write(char))
+  }
 
   read(port: number): number {
     throw new Error(`BDOS read not supported on port ${port}`)
@@ -21,7 +28,7 @@ export class BdosDevice implements Device {
 
     if (functionCode === 2) {
       const charCode = this.computer.getRegisterValue('E') & 0xff
-      process.stdout.write(String.fromCharCode(charCode))
+      this.output(String.fromCharCode(charCode))
       return
     }
 
@@ -30,14 +37,12 @@ export class BdosDevice implements Device {
       const lowByte = this.computer.getRegisterValue('E') & 0xff
       let address = (highByte << 8) | lowByte
 
-      // Salvaguarda: máximo 64KB de cadena.
       for (let i = 0; i < 0x10000; i++) {
         const byte = this.computer.bus.readRam(address)
         if (byte === 0x24) {
-          // '$' marca el fin de la cadena en CP/M.
           return
         }
-        process.stdout.write(String.fromCharCode(byte))
+        this.output(String.fromCharCode(byte))
         address = (address + 1) & 0xffff
       }
     }
