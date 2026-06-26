@@ -14,10 +14,10 @@ import { Computer } from './core/Computer'
  *    salta a 0, el emulador se detiene.
  */
 export class CpuDiagComputer extends Computer {
-  constructor(debug = false) {
+  constructor(debug = false, bdosOutput?: (char: string) => void) {
     super(debug)
 
-    const bdosDevice = new BdosDevice(this)
+    const bdosDevice = new BdosDevice(this, bdosOutput)
     this.bus.connectDeviceToWritePort(0xff, bdosDevice)
 
     // Trampolín BDOS en 0x0005: OUT 0xFF ; RET
@@ -29,7 +29,11 @@ export class CpuDiagComputer extends Computer {
     this.bus.writeRam(0x76, 0x0000)
   }
 
-  public runDiagnostic(romPath: string, loadAddress = 0x0100, stackPointer = 0xf000) {
+  public runDiagnostic(
+    romPath: string,
+    loadAddress = 0x0100,
+    stackPointer = 0xf000
+  ) {
     this.loadProgramFromFile(romPath, loadAddress)
     this.setStackPointer(stackPointer)
     this.setProgramCounter(loadAddress)
